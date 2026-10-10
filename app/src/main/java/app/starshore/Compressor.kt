@@ -10,7 +10,6 @@ import androidx.media3.common.MimeTypes
 import androidx.media3.common.audio.AudioProcessor
 import androidx.media3.effect.FrameDropEffect
 import androidx.media3.effect.Presentation
-import androidx.media3.transformer.AudioEncoderSettings
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.DefaultEncoderFactory
 import androidx.media3.transformer.EditedMediaItem

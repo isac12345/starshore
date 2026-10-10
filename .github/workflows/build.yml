@@ -16,13 +16,16 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v2
-        with:
-          packages: platform-tools,platforms;android-34,build-tools;34.0.0
-          cmdline-tools-version: "11000-0"
+      - name: Install Android SDK via apt
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq android-sdk-platform-tools android-sdk-build-tools android-sdk-platform-34 || sudo apt-get install -y -qq android-sdk
+          echo "ANDROID_HOME=${ANDROID_HOME:-/usr/lib/android-sdk}" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=${ANDROID_HOME:-/usr/lib/android-sdk}" >> $GITHUB_ENV
 
       - name: SDK manager platform/build-tools
         run: |
+          export PATH="${ANDROID_HOME:-/usr/lib/android-sdk}/cmdline-tools/latest/bin:${ANDROID_HOME:-/usr/lib/android-sdk}/platform-tools:${PATH}"
           yes | sdkmanager --licenses || true
           sdkmanager "platforms;android-34" "build-tools;34.0.0" || true
 

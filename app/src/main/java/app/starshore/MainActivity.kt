@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Outline
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.media.MediaMetadataRetriever
@@ -22,6 +23,7 @@ import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
+import android.view.ViewOutlineProvider
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.CheckBox
@@ -68,9 +70,10 @@ class MainActivity : Activity() {
     private var seeking = false
     private var previewJob: Compressor.Job? = null
 
-    private val modeBtns = ArrayList<Button>()
     private val tabBtns = ArrayList<Button>()
     private lateinit var modeTv: TextView
+    private lateinit var chipTv: TextView
+    private lateinit var chipDot: View
     private lateinit var permBtn: Button
     private lateinit var cleanBox: LinearLayout
     private lateinit var compBox: LinearLayout
@@ -141,11 +144,16 @@ class MainActivity : Activity() {
         b.background = shape(if (on) cStar else cLine, 12)
     }
 
-    private fun pill(t: String, on: Boolean, click: () -> Unit): Button {
+    private fun styleTab(b: Button, on: Boolean) {
+        b.setTextColor(if (on) Color.WHITE else cMute)
+        b.background = shape(if (on) cStar else Color.TRANSPARENT, 12)
+    }
+
+    private fun pill(t: String, on: Boolean, sp: Float = 13f, click: () -> Unit): Button {
         val b = Button(this)
         b.text = t
         b.setAllCaps(false)
-        b.textSize = 13f
+        b.textSize = sp
         b.stateListAnimator = null
         b.minHeight = 0
         b.minimumHeight = 0
@@ -205,49 +213,91 @@ class MainActivity : Activity() {
         scroll.addView(col, ViewGroup.LayoutParams(MP, WC))
         root.addView(scroll, FrameLayout.LayoutParams(MP, MP))
 
+        val bannerBox = FrameLayout(this)
         val banner = ImageView(this)
         banner.scaleType = ImageView.ScaleType.CENTER_CROP
         banner.setImageResource(R.drawable.banner)
-        col.addView(banner, LinearLayout.LayoutParams(MP, dp(190)))
+        bannerBox.addView(banner, FrameLayout.LayoutParams(MP, MP))
+        val fade = View(this)
+        fade.background = GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(Color.argb(0, 6, 10, 28), Color.argb(0, 6, 10, 28), Color.argb(235, 6, 10, 28))
+        )
+        bannerBox.addView(fade, FrameLayout.LayoutParams(MP, MP))
+        val rad = dp(28)
+        bannerBox.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) {
+                outline.setRoundRect(0, -rad, view.width, view.height, rad.toFloat())
+            }
+        }
+        bannerBox.clipToOutline = true
+        col.addView(bannerBox, LinearLayout.LayoutParams(MP, dp(210)))
 
         val head = LinearLayout(this)
         head.orientation = LinearLayout.HORIZONTAL
-        head.gravity = Gravity.CENTER_VERTICAL
-        head.setPadding(dp(18), dp(14), dp(18), 0)
+        head.gravity = Gravity.BOTTOM
+        head.setPadding(dp(20), 0, dp(20), 0)
         val logo = ImageView(this)
+        logo.scaleType = ImageView.ScaleType.CENTER_CROP
         logo.setImageResource(R.mipmap.ic_launcher)
-        head.addView(logo, LinearLayout.LayoutParams(dp(56), dp(56)))
+        val lbg = shape(cInk, 22)
+        lbg.setStroke(dp(2), cIce)
+        logo.background = lbg
+        logo.setPadding(dp(2), dp(2), dp(2), dp(2))
+        logo.outlineProvider = object : ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: Outline) {
+                outline.setRoundRect(0, 0, view.width, view.height, dp(22).toFloat())
+            }
+        }
+        logo.clipToOutline = true
+        head.addView(logo, LinearLayout.LayoutParams(dp(76), dp(76)))
         val tcol = LinearLayout(this)
         tcol.orientation = LinearLayout.VERTICAL
-        tcol.setPadding(dp(12), 0, 0, 0)
-        tcol.addView(tv("Starshore", 26f, cIce, true))
+        tcol.setPadding(dp(14), 0, 0, 0)
+        tcol.addView(tv("Starshore", 28f, cIce, true))
         tcol.addView(tv("Bersihkan sampah, kecilkan video", 13f, cMute))
         head.addView(tcol)
-        col.addView(head)
+        val hp = LinearLayout.LayoutParams(MP, WC)
+        hp.topMargin = -dp(44)
+        col.addView(head, hp)
 
-        val mc = card()
-        mc.addView(tv("Akses", 14f, cMute))
-        val mr = LinearLayout(this)
-        mr.orientation = LinearLayout.HORIZONTAL
-        listOf("Biasa", "Shizuku", "Root").forEachIndexed { i, n ->
-            val btn = pill(n, false) { setMode(i) }
-            modeBtns.add(btn)
-            mr.addView(btn, lp(0, WC, 1f, 2))
+        // chip status akses, ketuk untuk ganti mode
+        val chip = LinearLayout(this)
+        chip.orientation = LinearLayout.HORIZONTAL
+        chip.gravity = Gravity.CENTER_VERTICAL
+        chip.setPadding(dp(12), dp(7), dp(14), dp(7))
+        val chipBg = shape(cPanel, 99)
+        chipBg.setStroke(dp(1), cLine)
+        chip.background = chipBg
+        chipDot = View(this)
+        val dotLp = LinearLayout.LayoutParams(dp(8), dp(8))
+        dotLp.rightMargin = dp(8)
+        chip.addView(chipDot, dotLp)
+        chipTv = tv("", 13f, cIce)
+        chip.addView(chipTv)
+        chip.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Mode akses")
+                .setItems(arrayOf("Biasa", "Shizuku", "Root")) { _, which -> setMode(which) }
+                .show()
         }
-        mc.addView(mr)
-        modeTv = tv("", 13f, cMute)
-        modeTv.setPadding(0, dp(8), 0, 0)
-        mc.addView(modeTv)
+        val chipLp = LinearLayout.LayoutParams(WC, WC)
+        chipLp.setMargins(dp(20), dp(14), dp(20), 0)
+        col.addView(chip, chipLp)
+        modeTv = tv("", 12f, cMute)
+        modeTv.setPadding(dp(22), dp(6), dp(20), 0)
+        col.addView(modeTv)
         permBtn = pill("Izinkan akses semua file", true) { askStorage() }
-        mc.addView(permBtn, lp(MP, WC, 0f, 0).also { it.topMargin = dp(8) })
-        col.addView(mc, cardLp())
+        col.addView(permBtn, cardLp())
 
         val tr = LinearLayout(this)
         tr.orientation = LinearLayout.HORIZONTAL
+        tr.setPadding(dp(4), dp(4), dp(4), dp(4))
+        tr.background = shape(cPanel, 16)
         listOf("Bersihkan", "Kompres", "Analisis").forEachIndexed { i, n ->
             val btn = pill(n, false) { showTab(i) }
             tabBtns.add(btn)
-            tr.addView(btn, lp(0, WC, 1f, 2))
+            tr.addView(btn, lp(0, WC, 1f, 0))
         }
         col.addView(tr, cardLp())
 
@@ -393,12 +443,14 @@ class MainActivity : Activity() {
     }
 
     private fun refreshMode(msg: String) {
-        for (i in modeBtns.indices) styleBtn(modeBtns[i], i == Sh.mode)
-        modeTv.text = if (msg.isNotEmpty()) msg else when (Sh.mode) {
-            Sh.SHIZUKU -> "Shizuku aktif."
-            Sh.ROOT -> "Root aktif."
-            else -> "Mode biasa. Cache app, sisa app, log sistem, dan TRIM butuh Shizuku atau root."
+        chipTv.text = when (Sh.mode) {
+            Sh.SHIZUKU -> "Shizuku aktif · tanpa root"
+            Sh.ROOT -> "Root aktif"
+            else -> "Mode biasa · ketuk untuk ganti"
         }
+        chipDot.background = shape(if (Sh.mode == Sh.NONE) cMute else cOk, 99)
+        modeTv.text = msg
+        modeTv.visibility = if (msg.isEmpty()) View.GONE else View.VISIBLE
         permBtn.visibility = if (hasStorage()) View.GONE else View.VISIBLE
     }
 
@@ -406,7 +458,7 @@ class MainActivity : Activity() {
         cleanBox.visibility = if (i == 0) View.VISIBLE else View.GONE
         compBox.visibility = if (i == 1) View.VISIBLE else View.GONE
         anaBox.visibility = if (i == 2) View.VISIBLE else View.GONE
-        for (k in tabBtns.indices) styleBtn(tabBtns[k], k == i)
+        for (k in tabBtns.indices) styleTab(tabBtns[k], k == i)
     }
 
     private fun isInstalled(p: String): Boolean = try {
@@ -755,11 +807,14 @@ class MainActivity : Activity() {
         val pr = LinearLayout(this)
         pr.orientation = LinearLayout.HORIZONTAL
         listOf("Jernih", "Seimbang", "Kecil", "Rek. layar").forEachIndexed { i, n ->
-            pr.addView(pill(n, cfg.matches(i)) {
+            val pb = pill(n, cfg.matches(i), 12f) {
                 cfg.preset(i)
                 renderSettings()
                 updateEst()
-            }, lp(0, WC, 1f, 2))
+            }
+            pb.setSingleLine(true)
+            pb.setPadding(dp(2), dp(10), dp(2), dp(10))
+            pr.addView(pb, lp(0, WC, 1f, 2))
         }
         c.addView(pr, lp(MP, WC, 0f, 0).also { it.topMargin = dp(6) })
 

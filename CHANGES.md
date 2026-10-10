@@ -1,5 +1,25 @@
 # CHANGES — Starshore
 
+## Build v2 (hijau, run 38047269161, ~3m8s)
+
+APK: `Starshore-apk` → `app-release.apk` (777 KB, debug-signed).
+
+Fitur baru dari zip (tak disentuh): Compare pembanding geser, KeepAlive
+foreground service, target ukuran + retry koreksi, preview 5 detik, preset
+"Rek. layar", analisis penyimpanan, HEVC otomatis fallback H.264.
+
+### Yang diubah (tahan workflow + 1 fix, tanpa ubah fitur/tampilan/paket/versi)
+
+1. `.github/workflows/build.yml` — zip v2 mengembalikan workflow tanpa SDK;
+   dikembalikan ke versi ber-SDK (langkah apt/sdkmanager platform-34).
+2. `Compressor.kt` — `AudioEncoderSettings` muncul lagi di zip v2 (aud "64k");
+   dihapus lagi sebelum push karena terbukti unresolved di Media3 1.4.1
+   (run 38030643187 kemarin). API baru lain (`videoEncoderName`,
+   `ClippingConfiguration`, `FOREGROUND_SERVICE_TYPE_DATA_SYNC`, Compare)
+   lolos compile tanpa perubahan.
+   Catatan jujur tetap berlaku: pilihan audio 64k memakai bitrate default
+   encoder; "Asli" dan "Tanpa audio" berfungsi normal.
+
 ## Build 1.0 (hijau, run 38030786089, ~3m48s)
 
 APK: `Starshore-apk` → `app-release.apk` (748 KB, debug-signed, langsung bisa dipasang).

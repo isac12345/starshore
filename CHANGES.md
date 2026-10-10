@@ -1,6 +1,19 @@
 # CHANGES — Starshore
 
-## Build v2 (hijau, run 38047269161, ~3m8s)
+## Build v2.1 (hijau, run 38049180058, ~3m23s)
+
+APK: `Starshore-apk` → `app-release.apk` (778 KB, debug-signed).
+
+Fix dari zip (tak disentuh): UI banner (fade + sudut) dan tab/mode
+(MainActivity.kt, +89/−34).
+
+### Yang diubah (tahan workflow + 1 fix)
+
+1. `.github/workflows/build.yml` — zip v2.1 me-reset workflow lagi;
+   dikembalikan ke versi ber-SDK.
+2. `Compressor.kt` — `AudioEncoderSettings` muncul lagi di zip; dihapus lagi
+   (hasil akhir identik dengan v2 — commit ini murni MainActivity).
+   Catatan audio-64k placebo tetap berlaku.
 
 APK: `Starshore-apk` → `app-release.apk` (777 KB, debug-signed).
 

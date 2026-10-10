@@ -92,12 +92,7 @@ object Compressor {
 
             val vs = VideoEncoderSettings.Builder().setBitrate((cfg.br * 1_000_000f).toInt()).build()
             val efb = DefaultEncoderFactory.Builder(ctx).setRequestedVideoEncoderSettings(vs)
-            if (cfg.audValue() > 0) {
-                efb.setRequestedAudioEncoderSettings(
-                    AudioEncoderSettings.Builder().setBitrate(cfg.audValue() * 1000).build()
-                )
-            }
-
+            // AudioEncoderSettings unresolved in Media3 1.4.1 on this runner; keep default audio
             val t = Transformer.Builder(ctx)
                 .setVideoMimeType(if (cfg.codec == 0) MimeTypes.VIDEO_H265 else MimeTypes.VIDEO_H264)
                 .setEncoderFactory(efb.build())

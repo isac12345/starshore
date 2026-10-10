@@ -21,7 +21,9 @@ Aturan:
 - Kalau ada API yang tidak cocok, pilih perbaikan paling kecil dan paling aman.
 
 Tempat yang paling mungkin error:
-- Compressor.kt: nama kelas dan signature Media3 (Transformer.Listener, Presentation.createForWidthAndHeight, FrameDropEffect.createDefaultFrameDropEffect, AudioEncoderSettings, Effects).
+- Compressor.kt: nama kelas dan signature Media3 (Transformer.Listener, Presentation.createForWidthAndHeight, FrameDropEffect.createDefaultFrameDropEffect, AudioEncoderSettings, Effects, MediaItem.ClippingConfiguration, dan properti ExportResult.videoEncoderName).
+- Compressor.kt: service foreground KeepAlive dan konstanta ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC, serta deklarasi service dan izin di AndroidManifest.xml.
+- Compare.kt: TextureView, SurfaceTexture, dan MediaPlayer untuk pembanding geser.
 - Sh.kt: pemanggilan Shizuku.newProcess lewat refleksi, dan merge manifest untuk ShizukuProvider.
 - R8 saat assembleRelease: kalau ada kelas hilang atau crash karena shrink, tambah aturan di app/proguard-rules.pro.
 
@@ -41,4 +43,20 @@ Mode akses: [Biasa / Shizuku / Root]
 Log (kalau ada): [tempel hasil `adb logcat -d | grep -i -E "starshore|AndroidRuntime"`]
 
 Cari penyebabnya di kode, perbaiki, lalu build ulang lewat GitHub Actions sampai hijau (cara kerjanya sama seperti prompt build). Jangan hapus fitur lain dan jangan tambah dependensi berat. Setelah itu catat perubahan di CHANGES.md.
+```
+
+## 3. Kompres masih lambat
+
+Sebelum menyalin, jalankan kompres di HP dan salin catatan di bawah tombol Kompres (ukuran, kecepatan x real-time, nama encoder).
+
+```
+Project ini aplikasi Android bernama Starshore (lihat README.md). Kompres video-nya masih lambat di HP saya.
+
+HP dan chip: [contoh: Redmi 10C, Snapdragon 680]
+Video uji: [resolusi, durasi, ukuran]
+Pengaturan: [codec, resolusi, FPS, mode ukuran hasil]
+Catatan dari app: [tempel baris yang muncul di bawah tombol Kompres]
+Di Video Compressor (aplikasi lain) video yang sama selesai dalam: [waktu]
+
+Cari penyebab lambatnya di Compressor.kt (Job.start dan Queue). Periksa: apakah encoder yang dipakai hardware (nama encoder yang diawali c2.android atau OMX.google berarti software), apakah efek Presentation atau FrameDropEffect ikut dipasang padahal tidak perlu, dan apakah ada pengaturan encoder Media3 yang bisa mempercepat tanpa membuat hasil membesar. Jangan tambah FFmpeg. Perbaiki yang paling berpengaruh, build lewat GitHub Actions sampai hijau, lalu catat perubahan di CHANGES.md.
 ```

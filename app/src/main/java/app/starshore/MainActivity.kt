@@ -18,11 +18,11 @@ import android.os.Bundle
 import android.os.Environment
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.WindowManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.FrameLayout
@@ -41,16 +41,9 @@ import java.util.concurrent.Executors
 private const val MP = ViewGroup.LayoutParams.MATCH_PARENT
 private const val WC = ViewGroup.LayoutParams.WRAP_CONTENT
 
-class Vid(val f: File) {
-    var sel = false
-    var durMs = 0L
-    var w = 0
-    var h = 0
-    var thumb: Bitmap? = null
-}
-
 class MainActivity : Activity() {
     private val io = Executors.newSingleThreadExecutor()
+    private val thumbIo = Executors.newSingleThreadExecutor()
     private val ui = Handler(Looper.getMainLooper())
 
     private val cInk = Color.parseColor("#060A1C")
@@ -63,15 +56,17 @@ class MainActivity : Activity() {
 
     private val cfg = Cfg()
     private var busy = false
+    private var previewing = false
     private var items: List<Item> = emptyList()
+    private var corpsePaths: List<String> = emptyList()
     private var vids: List<Vid> = emptyList()
-    private val results = ArrayList<Pair<File, File>>()
-    private var job: Compressor.Job? = null
-    private var curOut: File? = null
-    private var beforeFile: File? = null
-    private var afterFile: File? = null
+    private var lastSel: Vid? = null
+    private var ana: Analysis? = null
     private var cleanMsg = ""
     private var cleanOk = false
+    private var shownStamp = 0L
+    private var seeking = false
+    private var previewJob: Compressor.Job? = null
 
     private val modeBtns = ArrayList<Button>()
     private val tabBtns = ArrayList<Button>()
@@ -79,16 +74,26 @@ class MainActivity : Activity() {
     private lateinit var permBtn: Button
     private lateinit var cleanBox: LinearLayout
     private lateinit var compBox: LinearLayout
+    private lateinit var anaBox: LinearLayout
     private lateinit var settingsBox: LinearLayout
     private lateinit var listBox: LinearLayout
+    private lateinit var infoTv: TextView
     private lateinit var estTv: TextView
+    private lateinit var resCard: LinearLayout
+    private lateinit var cmpHolder: LinearLayout
+    private lateinit var cmp: CompareView
+    private lateinit var ppBtn: Button
+    private lateinit var seek: SeekBar
+    private lateinit var posTv: TextView
+    private lateinit var chipsBox: LinearLayout
+    private lateinit var cinfo: TextView
+    private lateinit var decideBox: LinearLayout
     private lateinit var statusTv: TextView
+    private lateinit var etaTv: TextView
+    private lateinit var logTv: TextView
     private lateinit var progBar: ProgressBar
     private lateinit var goBtn: Button
-    private lateinit var beforeImg: ImageView
-    private lateinit var afterImg: ImageView
-    private lateinit var beforeTv: TextView
-    private lateinit var afterTv: TextView
+    private lateinit var prevBtn: Button
     private var cleanBtn: Button? = null
 
     // ---------- helper tampilan ----------
@@ -163,6 +168,12 @@ class MainActivity : Activity() {
         return b
     }
 
+    private fun label(t: String): TextView {
+        val v = tv(t, 13f, cMute)
+        v.setPadding(0, dp(10), 0, 0)
+        return v
+    }
+
     private fun segRow(labels: List<String>, sel: Int, pick: (Int) -> Unit): LinearLayout {
         val r = LinearLayout(this)
         r.orientation = LinearLayout.HORIZONTAL
@@ -178,6 +189,8 @@ class MainActivity : Activity() {
         super.onCreate(b)
         window.statusBarColor = cInk
         window.navigationBarColor = cInk
+        cfg.codec = if (Hw.hevc) 0 else 1
+        cfg.preset(1)
 
         val root = FrameLayout(this)
         root.setBackgroundColor(cInk)
@@ -212,7 +225,6 @@ class MainActivity : Activity() {
         head.addView(tcol)
         col.addView(head)
 
-        // kartu akses
         val mc = card()
         mc.addView(tv("Akses", 14f, cMute))
         val mr = LinearLayout(this)
@@ -230,16 +242,14 @@ class MainActivity : Activity() {
         mc.addView(permBtn, lp(MP, WC, 0f, 0).also { it.topMargin = dp(8) })
         col.addView(mc, cardLp())
 
-        // tab
         val tr = LinearLayout(this)
         tr.orientation = LinearLayout.HORIZONTAL
-        listOf("Bersihkan", "Kompres video").forEachIndexed { i, n ->
+        listOf("Bersihkan", "Kompres", "Analisis").forEachIndexed { i, n ->
             val btn = pill(n, false) { showTab(i) }
             tabBtns.add(btn)
             tr.addView(btn, lp(0, WC, 1f, 2))
         }
-        val tlp = cardLp()
-        col.addView(tr, tlp)
+        col.addView(tr, cardLp())
 
         cleanBox = LinearLayout(this)
         cleanBox.orientation = LinearLayout.VERTICAL
@@ -250,8 +260,11 @@ class MainActivity : Activity() {
         col.addView(compBox, LinearLayout.LayoutParams(MP, WC))
         buildComp()
 
-        val pad = View(this)
-        col.addView(pad, LinearLayout.LayoutParams(MP, dp(32)))
+        anaBox = LinearLayout(this)
+        anaBox.orientation = LinearLayout.VERTICAL
+        col.addView(anaBox, LinearLayout.LayoutParams(MP, WC))
+
+        col.addView(View(this), LinearLayout.LayoutParams(MP, dp(32)))
         setContentView(root)
 
         Sh.listen {
@@ -261,7 +274,6 @@ class MainActivity : Activity() {
                 refreshMode("Shizuku aktif.")
             }
         }
-
         val saved = getSharedPreferences("s", 0).getInt("mode", 0)
         if (saved != 0) {
             io.execute {
@@ -273,23 +285,51 @@ class MainActivity : Activity() {
 
         renderClean()
         renderSettings()
+        renderAna()
         updateEst()
         refreshMode("")
         showTab(0)
     }
 
+    private val posRun = object : Runnable {
+        override fun run() {
+            if (resCard.visibility == View.VISIBLE && !seeking) {
+                val d = cmp.duration()
+                if (d > 0) {
+                    seek.max = d
+                    seek.progress = cmp.position()
+                    posTv.text = mmss(cmp.position() / 1000L)
+                }
+            }
+            ui.postDelayed(this, 500)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         permBtn.visibility = if (hasStorage()) View.GONE else View.VISIBLE
+        Queue.onChange = { refreshComp() }
+        refreshComp()
+        ui.removeCallbacks(posRun)
+        ui.post(posRun)
+    }
+
+    override fun onPause() {
+        Queue.onChange = null
+        ui.removeCallbacks(posRun)
+        cmp.pause()
+        ppBtn.text = "Putar"
+        super.onPause()
     }
 
     override fun onDestroy() {
         Sh.unlisten()
-        job?.cancel()
+        previewJob?.cancel()
+        cmp.release()
         super.onDestroy()
     }
 
-    // ---------- izin & mode ----------
+    // ---------- izin dan mode ----------
 
     private fun hasStorage(): Boolean =
         if (Build.VERSION.SDK_INT >= 30) Environment.isExternalStorageManager()
@@ -357,7 +397,7 @@ class MainActivity : Activity() {
         modeTv.text = if (msg.isNotEmpty()) msg else when (Sh.mode) {
             Sh.SHIZUKU -> "Shizuku aktif."
             Sh.ROOT -> "Root aktif."
-            else -> "Mode biasa. Cache app, log sistem, dan TRIM butuh Shizuku atau root."
+            else -> "Mode biasa. Cache app, sisa app, log sistem, dan TRIM butuh Shizuku atau root."
         }
         permBtn.visibility = if (hasStorage()) View.GONE else View.VISIBLE
     }
@@ -365,7 +405,15 @@ class MainActivity : Activity() {
     private fun showTab(i: Int) {
         cleanBox.visibility = if (i == 0) View.VISIBLE else View.GONE
         compBox.visibility = if (i == 1) View.VISIBLE else View.GONE
+        anaBox.visibility = if (i == 2) View.VISIBLE else View.GONE
         for (k in tabBtns.indices) styleBtn(tabBtns[k], k == i)
+    }
+
+    private fun isInstalled(p: String): Boolean = try {
+        packageManager.getPackageInfo(p, 0)
+        true
+    } catch (e: Exception) {
+        false
     }
 
     // ---------- tab Bersihkan ----------
@@ -378,8 +426,8 @@ class MainActivity : Activity() {
             c.addView(tv(title, 16f, if (cleanOk) cOk else cIce, true))
             c.addView(
                 tv(
-                    "Yang dihapus beneran: file duplikat, file sementara dan log, APK sisa, folder kosong. " +
-                        "Hasil pindai ditampilkan dulu, kamu yang pilih.", 13f, cMute
+                    "Yang dihapus beneran: duplikat, file sementara dan log, APK sisa, folder kosong, " +
+                        "sisa aplikasi yang sudah dihapus. Hasil pindai ditampilkan dulu, kamu yang pilih.", 13f, cMute
                 )
             )
             val b = big(if (busy) "Tunggu sebentar..." else if (cleanMsg.isEmpty()) "Pindai sekarang" else "Pindai lagi") {
@@ -390,7 +438,7 @@ class MainActivity : Activity() {
             c.addView(b, lp(MP, WC, 0f, 0).also { it.topMargin = dp(12) })
         } else {
             c.addView(tv("Hasil pindai", 16f, cIce, true))
-            c.addView(tv("Ketuk nama untuk lihat daftar file.", 12f, cMute))
+            c.addView(tv("Ketuk nama untuk lihat daftar.", 12f, cMute))
             for (item in items) {
                 val r = LinearLayout(this)
                 r.orientation = LinearLayout.HORIZONTAL
@@ -425,9 +473,9 @@ class MainActivity : Activity() {
         val b = cleanBtn ?: return
         var total = 0L
         var any = false
-        for (it in items) {
-            if (it.checked && !it.locked) {
-                total += it.bytes
+        for (item in items) {
+            if (item.checked && !item.locked) {
+                total += item.bytes
                 any = true
             }
         }
@@ -437,18 +485,24 @@ class MainActivity : Activity() {
     }
 
     private fun showFiles(item: Item) {
-        if (item.files.isEmpty()) return
-        val sb = StringBuilder()
-        val base = Cleaner.root.path
-        for ((i, f) in item.files.withIndex()) {
-            if (i >= 150) {
-                sb.append("... dan ").append(item.files.size - 150).append(" lainnya")
-                break
+        val msg: String
+        if (item.detail.isNotEmpty()) {
+            msg = item.detail
+        } else if (item.files.isNotEmpty()) {
+            val sb = StringBuilder()
+            val base = Cleaner.root.path
+            for ((i, f) in item.files.withIndex()) {
+                if (i >= 150) {
+                    sb.append("... dan ").append(item.files.size - 150).append(" lainnya")
+                    break
+                }
+                sb.append(f.path.removePrefix(base)).append("  (").append(fmt(f.length())).append(")\n")
             }
-            sb.append(f.path.removePrefix(base)).append("  (").append(fmt(f.length())).append(")\n")
+            msg = sb.toString()
+        } else {
+            return
         }
-        AlertDialog.Builder(this).setTitle(item.title).setMessage(sb.toString())
-            .setPositiveButton("Tutup", null).show()
+        AlertDialog.Builder(this).setTitle(item.title).setMessage(msg).setPositiveButton("Tutup", null).show()
     }
 
     private fun doScan() {
@@ -467,12 +521,17 @@ class MainActivity : Activity() {
             val s = Cleaner.scan()
             val d = Cleaner.dups(s.files)
             val cb = if (priv) Cleaner.cacheBytes() else 0L
+            val cp = if (priv) Cleaner.corpses { isInstalled(it) } else Corpse(emptyList(), 0L, "")
             val list = ArrayList<Item>()
+            val need = "Butuh Shizuku atau root"
+            list.add(
+                Item("cache", "Cache aplikasi", if (priv) "Semua app, internal dan eksternal" else need, cb, emptyList(), priv, !priv)
+            )
             list.add(
                 Item(
-                    "cache", "Cache aplikasi",
-                    if (priv) "Semua app, internal dan eksternal" else "Butuh Shizuku atau root",
-                    cb, emptyList(), priv, !priv
+                    "corpse", "Sisa aplikasi yang sudah dihapus",
+                    if (!priv) need else if (cp.paths.isEmpty()) "Tidak ada" else "${cp.paths.size} folder di Android/data, obb, media",
+                    cp.bytes, emptyList(), cp.paths.isNotEmpty(), !priv || cp.paths.isEmpty(), cp.detail
                 )
             )
             list.add(
@@ -485,7 +544,7 @@ class MainActivity : Activity() {
             list.add(
                 Item(
                     "junk", "File sementara dan log",
-                    if (s.junk.isEmpty()) "Tidak ada" else "${s.junk.size} file (.tmp .log .bak, thumbnail, folder cache)",
+                    if (s.junk.isEmpty()) "Tidak ada" else "${s.junk.size} file (.tmp .log .bak, thumbnail, sampah galeri)",
                     Cleaner.size(s.junk), s.junk, s.junk.isNotEmpty(), s.junk.isEmpty()
                 )
             )
@@ -503,22 +562,17 @@ class MainActivity : Activity() {
                     0L, s.empty, s.empty.isNotEmpty(), s.empty.isEmpty()
                 )
             )
-            list.add(
-                Item(
-                    "log", "Log sistem",
-                    if (priv) "logcat, ANR, tombstone" else "Butuh Shizuku atau root",
-                    0L, emptyList(), priv, !priv
-                )
-            )
+            list.add(Item("log", "Log sistem", if (priv) "logcat, ANR, tombstone" else need, 0L, emptyList(), priv, !priv))
             list.add(
                 Item(
                     "trim", "TRIM penyimpanan (fstrim)",
-                    if (priv) "Rapikan blok kosong, bikin I/O lebih lancar" else "Butuh Shizuku atau root",
+                    if (priv) "Rapikan blok kosong supaya I/O tetap lancar" else need,
                     0L, emptyList(), priv, !priv
                 )
             )
             ui.post {
                 busy = false
+                corpsePaths = cp.paths
                 items = list
                 cleanMsg = ""
                 renderClean()
@@ -529,7 +583,7 @@ class MainActivity : Activity() {
     private fun doClean() {
         if (busy) return
         val sel = ArrayList<Item>()
-        for (it in items) if (it.checked && !it.locked) sel.add(it)
+        for (item in items) if (item.checked && !item.locked) sel.add(item)
         if (sel.isEmpty()) return
         busy = true
         updateCleanBtn()
@@ -543,10 +597,23 @@ class MainActivity : Activity() {
                         Cleaner.cleanCache()
                         freed += item.bytes
                     }
+                    "corpse" -> {
+                        Cleaner.deleteCorpses(corpsePaths)
+                        freed += item.bytes
+                    }
                     "log" -> Cleaner.cleanLogs()
                     "trim" -> {
-                        val o = Cleaner.trim().trim()
-                        notes.add(if (o.isEmpty()) "TRIM sudah dijalankan" else "TRIM: " + o.take(100))
+                        val o = Cleaner.trim()
+                        val low = o.lowercase()
+                        if (o.isEmpty()) {
+                            notes.add("TRIM dijalankan lewat sistem (ROM tidak menampilkan hasil)")
+                        } else if (low.contains("not found") || low.contains("inaccessible") ||
+                            low.contains("unknown") || low.contains("denied") || low.contains("exception")
+                        ) {
+                            notes.add("TRIM tidak didukung ROM ini, dilewati")
+                        } else {
+                            notes.add("TRIM: " + o.lines().first().take(90))
+                        }
                     }
                     "empty" -> Cleaner.deleteDirs(item.files)
                     else -> {
@@ -576,98 +643,99 @@ class MainActivity : Activity() {
         settingsBox.orientation = LinearLayout.VERTICAL
         compBox.addView(settingsBox, LinearLayout.LayoutParams(MP, WC))
 
-        // daftar video
         val lc = card()
         lc.addView(tv("Video", 16f, cIce, true))
         lc.addView(pill("Cari video di penyimpanan", true) { findVideos() }, lp(MP, WC, 0f, 0).also { it.topMargin = dp(8) })
         listBox = LinearLayout(this)
         listBox.orientation = LinearLayout.VERTICAL
         lc.addView(listBox)
-        estTv = tv("", 13f, cMute)
-        estTv.setPadding(0, dp(8), 0, 0)
+        infoTv = tv("", 12f, cMute)
+        infoTv.setPadding(0, dp(8), 0, 0)
+        lc.addView(infoTv)
+        estTv = tv("", 13f, cIce, true)
+        estTv.setPadding(0, dp(4), 0, 0)
         lc.addView(estTv)
         compBox.addView(lc, cardLp())
 
-        // preview sebelum / sesudah
-        val pc = card()
-        pc.addView(tv("Sebelum dan sesudah", 16f, cIce, true))
-        pc.addView(tv("Ketuk gambar untuk memutar videonya.", 12f, cMute))
-        val pr = LinearLayout(this)
-        pr.orientation = LinearLayout.HORIZONTAL
-        pr.setPadding(0, dp(8), 0, 0)
-        beforeImg = ImageView(this)
-        afterImg = ImageView(this)
-        beforeTv = tv("Sebelum", 12f, cMute)
-        afterTv = tv("Sesudah", 12f, cMute)
-        for (p in listOf(Pair(beforeImg, beforeTv), Pair(afterImg, afterTv))) {
-            val colv = LinearLayout(this)
-            colv.orientation = LinearLayout.VERTICAL
-            p.first.scaleType = ImageView.ScaleType.CENTER_CROP
-            p.first.background = shape(cLine, 10)
-            colv.addView(p.first, LinearLayout.LayoutParams(MP, dp(120)))
-            colv.addView(p.second)
-            pr.addView(colv, lp(0, WC, 1f, 4))
+        // kartu hasil / preview
+        resCard = card()
+        resCard.visibility = View.GONE
+        resCard.addView(tv("Bandingkan", 16f, cIce, true))
+        cmpHolder = LinearLayout(this)
+        cmpHolder.orientation = LinearLayout.VERTICAL
+        cmpHolder.setPadding(0, dp(8), 0, 0)
+        cmp = CompareView(this)
+        cmpHolder.addView(cmp, LinearLayout.LayoutParams(dp(100), dp(100)))
+        resCard.addView(cmpHolder)
+        val cr = LinearLayout(this)
+        cr.orientation = LinearLayout.HORIZONTAL
+        cr.gravity = Gravity.CENTER_VERTICAL
+        cr.setPadding(0, dp(8), 0, 0)
+        ppBtn = pill("Jeda", true) {
+            ppBtn.text = if (cmp.toggle()) "Jeda" else "Putar"
         }
-        beforeImg.setOnClickListener { beforeFile?.let { f -> play(f) } }
-        afterImg.setOnClickListener { afterFile?.let { f -> play(f) } }
-        pc.addView(pr)
-        compBox.addView(pc, cardLp())
+        cr.addView(ppBtn, LinearLayout.LayoutParams(dp(80), WC))
+        seek = SeekBar(this)
+        seek.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+            override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
+                if (fromUser) cmp.seek(p)
+            }
 
-        // tombol jalan
+            override fun onStartTrackingTouch(s: SeekBar?) { seeking = true }
+
+            override fun onStopTrackingTouch(s: SeekBar?) { seeking = false }
+        })
+        cr.addView(seek, LinearLayout.LayoutParams(0, WC, 1f))
+        posTv = tv("0:00", 12f, cMute)
+        cr.addView(posTv)
+        resCard.addView(cr)
+        resCard.addView(tv("Geser garis putih. Kiri video asli, kanan hasil kompres. Suara dari hasil kompres.", 12f, cMute))
+        chipsBox = LinearLayout(this)
+        chipsBox.orientation = LinearLayout.HORIZONTAL
+        resCard.addView(chipsBox)
+        cinfo = tv("", 13f, cIce)
+        cinfo.setPadding(0, dp(8), 0, 0)
+        resCard.addView(cinfo)
+        decideBox = LinearLayout(this)
+        decideBox.orientation = LinearLayout.HORIZONTAL
+        decideBox.addView(big("Hapus file asli") { deleteOriginals() }, lp(0, WC, 1f, 3))
+        decideBox.addView(big("Simpan keduanya") { keepBoth() }, lp(0, WC, 1f, 3))
+        resCard.addView(decideBox, lp(MP, WC, 0f, 0).also { it.topMargin = dp(10) })
+        compBox.addView(resCard, cardLp())
+
         val ac = card()
         statusTv = tv("Pilih video, atur kualitas, lalu kompres.", 13f, cMute)
         ac.addView(statusTv)
+        etaTv = tv("", 12f, cMute)
+        ac.addView(etaTv)
         progBar = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal)
         progBar.max = 100
         ac.addView(progBar, lp(MP, WC, 0f, 0).also { it.topMargin = dp(8) })
+        logTv = tv("", 12f, cMute)
+        logTv.setPadding(0, dp(6), 0, 0)
+        ac.addView(logTv)
+        val br = LinearLayout(this)
+        br.orientation = LinearLayout.HORIZONTAL
+        prevBtn = pill("Preview 5 detik", false) { doPreview() }
+        br.addView(prevBtn, lp(0, WC, 1f, 3))
         goBtn = big("Kompres") {
-            if (busy) cancelCompress() else startCompress()
+            if (Queue.running) Queue.cancel() else startCompress()
         }
-        ac.addView(goBtn, lp(MP, WC, 0f, 0).also { it.topMargin = dp(8) })
+        br.addView(goBtn, lp(0, WC, 1.4f, 3))
+        ac.addView(br, lp(MP, WC, 0f, 0).also { it.topMargin = dp(8) })
         compBox.addView(ac, cardLp())
     }
 
-    private fun renderSettings() {
-        settingsBox.removeAllViews()
-        val c = card()
-        c.addView(tv("Kualitas", 16f, cIce, true))
-        val pr = LinearLayout(this)
-        pr.orientation = LinearLayout.HORIZONTAL
-        listOf("Jernih", "Seimbang", "Kecil").forEachIndexed { i, n ->
-            pr.addView(pill(n, cfg.matches(i)) {
-                cfg.preset(i)
-                renderSettings()
-                updateEst()
-            }, lp(0, WC, 1f, 2))
-        }
-        c.addView(pr, lp(MP, WC, 0f, 0).also { it.topMargin = dp(6) })
-
-        c.addView(tv("Codec", 13f, cMute).also { it.setPadding(0, dp(10), 0, 0) })
-        c.addView(segRow(listOf("HEVC (H.265)", "H.264"), cfg.codec) {
-            cfg.codec = it
-            renderSettings()
-        })
-        c.addView(tv("Resolusi", 13f, cMute).also { it.setPadding(0, dp(10), 0, 0) })
-        c.addView(segRow(listOf("Asli", "1080p", "720p", "480p"), cfg.res) {
-            cfg.res = it
-            renderSettings()
-        })
-        c.addView(tv("FPS", 13f, cMute).also { it.setPadding(0, dp(10), 0, 0) })
-        c.addView(segRow(listOf("Asli", "60", "30", "24"), cfg.fps) {
-            cfg.fps = it
-            renderSettings()
-        })
-
-        val lbl = tv("Bitrate video: " + "%.1f".format(cfg.br) + " Mbps", 13f, cMute)
-        lbl.setPadding(0, dp(10), 0, 0)
+    private fun slider(c: LinearLayout, max: Int, prog: Int, text: (Int) -> String, onSet: (Int) -> Unit) {
+        val lbl = label(text(prog))
         c.addView(lbl)
         val sb = SeekBar(this)
-        sb.max = 23
-        sb.progress = Math.round(cfg.br * 2f) - 1
+        sb.max = max
+        sb.progress = prog
         sb.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
             override fun onProgressChanged(s: SeekBar?, p: Int, fromUser: Boolean) {
-                cfg.br = (p + 1) / 2f
-                lbl.text = "Bitrate video: " + "%.1f".format(cfg.br) + " Mbps"
+                onSet(p)
+                lbl.text = text(p)
                 updateEst()
             }
 
@@ -678,12 +746,78 @@ class MainActivity : Activity() {
             }
         })
         c.addView(sb)
+    }
 
-        c.addView(tv("Audio", 13f, cMute).also { it.setPadding(0, dp(10), 0, 0) })
-        c.addView(segRow(listOf("128k", "64k", "Tanpa"), cfg.aud) {
+    private fun renderSettings() {
+        settingsBox.removeAllViews()
+        val c = card()
+        c.addView(tv("Kualitas", 16f, cIce, true))
+        val pr = LinearLayout(this)
+        pr.orientation = LinearLayout.HORIZONTAL
+        listOf("Jernih", "Seimbang", "Kecil", "Rek. layar").forEachIndexed { i, n ->
+            pr.addView(pill(n, cfg.matches(i)) {
+                cfg.preset(i)
+                renderSettings()
+                updateEst()
+            }, lp(0, WC, 1f, 2))
+        }
+        c.addView(pr, lp(MP, WC, 0f, 0).also { it.topMargin = dp(6) })
+
+        c.addView(label("Codec"))
+        c.addView(segRow(listOf("HEVC (H.265)", "H.264"), cfg.codec) {
+            cfg.codec = it
+            renderSettings()
+        })
+        if (cfg.codec == 0 && !Hw.hevc) {
+            c.addView(tv("HP ini tidak punya encoder HEVC hardware, jadi otomatis dipakai H.264 (jauh lebih cepat).", 12f, cMute))
+        }
+        c.addView(label("Resolusi"))
+        c.addView(segRow(listOf("Asli", "1080p", "720p", "480p"), cfg.res) {
+            cfg.res = it
+            renderSettings()
+            updateEst()
+        })
+        c.addView(label("FPS"))
+        c.addView(segRow(listOf("Asli", "60", "30", "24"), cfg.fps) {
+            cfg.fps = it
+            renderSettings()
+        })
+        c.addView(label("Ukuran hasil"))
+        c.addView(segRow(listOf("Otomatis", "Target ukuran", "Manual"), cfg.mode) {
+            cfg.mode = it
+            renderSettings()
+            updateEst()
+        })
+        when (cfg.mode) {
+            0 -> slider(c, 16, (cfg.pct - 20) / 5, { "Ukuran hasil: ${20 + it * 5}% dari bitrate asli" }, { cfg.pct = 20 + it * 5 })
+            1 -> {
+                val r = LinearLayout(this)
+                r.orientation = LinearLayout.HORIZONTAL
+                r.setPadding(0, dp(6), 0, 0)
+                listOf(10, 25, 50, 100).forEach { mb ->
+                    r.addView(pill("$mb MB", cfg.targetMb == mb) {
+                        cfg.targetMb = mb
+                        renderSettings()
+                        updateEst()
+                    }, lp(0, WC, 1f, 2))
+                }
+                c.addView(r)
+                slider(c, 39, cfg.targetMb / 5 - 1, { "Target: ${(it + 1) * 5} MB per video" }, { cfg.targetMb = (it + 1) * 5 })
+            }
+            else -> slider(
+                c, 23, Math.round(cfg.br * 2f) - 1,
+                { "Bitrate: " + "%.1f".format((it + 1) / 2f) + " Mbps (maks 90% bitrate asli)" },
+                { cfg.br = (it + 1) / 2f }
+            )
+        }
+        c.addView(label("Audio"))
+        c.addView(segRow(listOf("Asli", "64k", "Tanpa"), cfg.aud) {
             cfg.aud = it
             renderSettings()
             updateEst()
+        })
+        c.addView(tv("Hasil selalu dibatasi di bawah bitrate asli, jadi file tidak membesar.", 12f, cMute).also {
+            it.setPadding(0, dp(8), 0, 0)
         })
         settingsBox.addView(c, cardLp())
     }
@@ -700,6 +834,7 @@ class MainActivity : Activity() {
             for (f in Cleaner.videos()) l.add(Vid(f))
             ui.post {
                 vids = l
+                lastSel = null
                 renderList()
                 updateEst()
                 statusTv.text = if (l.isEmpty()) "Tidak ada video besar ditemukan." else "${l.size} video ditemukan."
@@ -718,10 +853,28 @@ class MainActivity : Activity() {
             cb.isChecked = v.sel
             cb.setOnCheckedChangeListener { _, on ->
                 v.sel = on
-                if (on) loadMeta(v)
+                if (on) {
+                    lastSel = v
+                    loadMeta(v)
+                }
                 updateEst()
             }
             r.addView(cb, LinearLayout.LayoutParams(WC, WC))
+            val iv = ImageView(this)
+            iv.scaleType = ImageView.ScaleType.CENTER_CROP
+            iv.background = shape(cLine, 8)
+            iv.setOnClickListener { play(v.f) }
+            val sm = v.small
+            if (sm != null) {
+                iv.setImageBitmap(sm)
+            } else {
+                thumbIo.execute {
+                    val bm = smallThumb(v.f)
+                    v.small = bm
+                    ui.post { if (bm != null) iv.setImageBitmap(bm) }
+                }
+            }
+            r.addView(iv, lp(dp(68), dp(42), 0f, 4))
             val t = LinearLayout(this)
             t.orientation = LinearLayout.VERTICAL
             val name = tv(v.f.name, 14f, cIce, true)
@@ -735,6 +888,59 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun smallThumb(f: File): Bitmap? {
+        val r = MediaMetadataRetriever()
+        return try {
+            r.setDataSource(f.absolutePath)
+            val b = r.getFrameAtTime(1_000_000L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            if (b == null) null
+            else Bitmap.createScaledBitmap(b, 160, maxOf(1, b.height * 160 / maxOf(1, b.width)), true)
+        } catch (e: Exception) {
+            null
+        } finally {
+            try { r.release() } catch (e: Exception) { }
+        }
+    }
+
+    private fun probe(v: Vid) {
+        val r = MediaMetadataRetriever()
+        try {
+            r.setDataSource(v.f.absolutePath)
+            v.durMs = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            var w = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
+            var h = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
+            val rot = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
+            if (rot == 90 || rot == 270) {
+                val t = w
+                w = h
+                h = t
+            }
+            v.w = w
+            v.h = h
+            v.bps = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)?.toLongOrNull() ?: 0L
+        } catch (e: Exception) {
+        } finally {
+            try { r.release() } catch (e: Exception) { }
+        }
+    }
+
+    private fun probeSize(f: File): Pair<Int, Int> {
+        val v = Vid(f)
+        probe(v)
+        return Pair(v.w, v.h)
+    }
+
+    private fun loadMeta(v: Vid) {
+        io.execute {
+            if (!v.probed()) probe(v)
+            ui.post {
+                val mbps = "%.1f".format(maxOf(v.bps, v.f.length() * 8000L / maxOf(1L, v.durMs)) / 1e6)
+                infoTv.text = "${v.f.name}: ${v.w}x${v.h}, ${mmss(v.durMs / 1000L)}, ${fmt(v.f.length())}, ±$mbps Mbps"
+                updateEst()
+            }
+        }
+    }
+
     private fun updateEst() {
         var cur = 0L
         var est = 0L
@@ -744,82 +950,13 @@ class MainActivity : Activity() {
             n++
             val size = v.f.length()
             cur += size
-            val e = if (v.durMs > 0) {
-                val bytes = (v.durMs / 1000.0) * (cfg.br * 1e6 + cfg.audValue() * 1000.0) / 8.0
-                minOf(size, bytes.toLong())
-            } else size
-            est += e
+            est += if (v.probed()) minOf(size, cfg.estBytes(v)) else size / 2
         }
         estTv.text = if (n == 0) "Belum ada video dipilih" else "$n video: " + fmt(cur) + " jadi sekitar " + fmt(est)
-        if (!busy) {
+        if (!Queue.running) {
             goBtn.text = if (n == 0) "Kompres" else "Kompres $n video"
             goBtn.isEnabled = n > 0
             goBtn.alpha = if (n > 0) 1f else 0.5f
-        }
-    }
-
-    private fun mmss(ms: Long): String {
-        val s = ms / 1000
-        return "%d:%02d".format(s / 60, s % 60)
-    }
-
-    private fun thumbOf(r: MediaMetadataRetriever, durMs: Long): Bitmap? {
-        val bmp = r.getFrameAtTime(durMs * 500L, MediaMetadataRetriever.OPTION_CLOSEST_SYNC) ?: return null
-        val w = 480
-        val h = maxOf(1, bmp.height * w / maxOf(1, bmp.width))
-        return Bitmap.createScaledBitmap(bmp, w, h, true)
-    }
-
-    private fun loadMeta(v: Vid) {
-        io.execute {
-            if (v.durMs == 0L) {
-                val r = MediaMetadataRetriever()
-                try {
-                    r.setDataSource(v.f.absolutePath)
-                    v.durMs = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-                    var w = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-                    var h = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-                    val rot = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
-                    if (rot == 90 || rot == 270) {
-                        val t = w
-                        w = h
-                        h = t
-                    }
-                    v.w = w
-                    v.h = h
-                    v.thumb = thumbOf(r, v.durMs)
-                } catch (e: Exception) {
-                } finally {
-                    try { r.release() } catch (e: Exception) { }
-                }
-            }
-            ui.post {
-                beforeFile = v.f
-                beforeImg.setImageBitmap(v.thumb)
-                beforeTv.text = "Sebelum: ${v.w}x${v.h}, ${mmss(v.durMs)}, ${fmt(v.f.length())}"
-                updateEst()
-            }
-        }
-    }
-
-    private fun showAfter(out: File) {
-        io.execute {
-            var bmp: Bitmap? = null
-            var dur = 0L
-            val r = MediaMetadataRetriever()
-            try {
-                r.setDataSource(out.absolutePath)
-                dur = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-                bmp = thumbOf(r, dur)
-            } catch (e: Exception) {
-            } finally {
-                try { r.release() } catch (e: Exception) { }
-            }
-            ui.post {
-                afterFile = out
-                afterImg.setImageBitmap(bmp)
-                afterTv.text = "Sesudah: ${mmss(dur)}, ${fmt(out.length())}"
-            }
         }
     }
 
@@ -839,7 +976,10 @@ class MainActivity : Activity() {
         d.show()
     }
 
+    // ---- kompres ----
+
     private fun startCompress() {
+        if (previewing) return
         val q = ArrayList<Vid>()
         for (v in vids) if (v.sel) q.add(v)
         if (q.isEmpty()) {
@@ -850,121 +990,248 @@ class MainActivity : Activity() {
             askStorage()
             return
         }
-        busy = true
-        results.clear()
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        goBtn.text = "Batal"
-        goBtn.isEnabled = true
-        goBtn.alpha = 1f
-        runNext(q, 0)
-    }
-
-    private fun runNext(q: List<Vid>, i: Int) {
-        if (i >= q.size) {
-            finishQueue()
-            return
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 2)
         }
-        val v = q[i]
-        if (v.w == 0 || v.h == 0) {
-            val r = MediaMetadataRetriever()
-            try {
-                r.setDataSource(v.f.absolutePath)
-                var w = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull() ?: 0
-                var h = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull() ?: 0
-                val rot = r.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)?.toIntOrNull() ?: 0
-                if (rot == 90 || rot == 270) {
-                    val t = w
-                    w = h
-                    h = t
-                }
-                v.w = w
-                v.h = h
-            } catch (e: Exception) {
-            } finally {
-                try { r.release() } catch (e: Exception) { }
+        goBtn.isEnabled = false
+        statusTv.text = "Menyiapkan..."
+        io.execute {
+            for (v in q) if (!v.probed()) probe(v)
+            ui.post {
+                resCard.visibility = View.GONE
+                cmp.release()
+                Queue.start(applicationContext, q, cfg)
+                refreshComp()
             }
         }
-        val out = File(v.f.parentFile, v.f.nameWithoutExtension + "_starshore.mp4")
+    }
+
+    private fun refreshComp() {
+        if (previewing) return
+        statusTv.text = if (Queue.status.isEmpty()) "Pilih video, atur kualitas, lalu kompres." else Queue.status
+        progBar.progress = Queue.percent
+        etaTv.text = if (Queue.eta.isEmpty()) "" else "sisa ±" + Queue.eta
+        logTv.text = Queue.log.joinToString("\n")
+        if (Queue.running) {
+            goBtn.text = "Batal"
+            goBtn.isEnabled = true
+            goBtn.alpha = 1f
+        } else {
+            updateEst()
+        }
+        if (!Queue.running && Queue.done.isNotEmpty() && Queue.stamp != shownStamp) {
+            shownStamp = Queue.stamp
+            buildChips()
+            showResult(Queue.done.size - 1)
+        }
+    }
+
+    private fun buildChips() {
+        chipsBox.removeAllViews()
+        if (Queue.done.size < 2) return
+        for (i in Queue.done.indices) {
+            chipsBox.addView(pill("${i + 1}", false) { showResult(i) }, lp(WC, WC, 0f, 2))
+        }
+    }
+
+    private fun showResult(i: Int) {
+        if (i < 0 || i >= Queue.done.size) return
+        val p = Queue.done[i]
+        val sz = probeSize(p.second)
+        val save = p.first.length() - p.second.length()
+        showCompare(
+            p.first, p.second, sz.first, sz.second, 0,
+            "${p.first.name}: ${fmt(p.first.length())} jadi ${fmt(p.second.length())}, hemat ${fmt(save)}", true
+        )
+    }
+
+    private fun showCompare(before: File, after: File, w: Int, h: Int, offset: Int, info: String, decision: Boolean) {
+        resCard.visibility = View.VISIBLE
+        cinfo.text = info
+        decideBox.visibility = if (decision) View.VISIBLE else View.GONE
+        val maxW = resources.displayMetrics.widthPixels - dp(64)
+        val maxH = (resources.displayMetrics.heightPixels * 0.5f).toInt()
+        cmp.show(before.absolutePath, after.absolutePath, w, h, maxW, maxH, offset)
+        ppBtn.text = "Jeda"
+    }
+
+    private fun doPreview() {
+        val v = lastSel
+        if (v == null || !v.sel) {
+            toast("Pilih video dulu")
+            return
+        }
+        if (previewing || Queue.running) return
+        previewing = true
+        prevBtn.isEnabled = false
+        statusTv.text = "Membuat preview 5 detik..."
+        io.execute {
+            if (!v.probed()) probe(v)
+            ui.post { runPreview(v) }
+        }
+    }
+
+    private fun runPreview(v: Vid) {
+        val dur = v.durMs
+        val clipLen = minOf(5000L, dur)
+        if (clipLen <= 0L) {
+            previewing = false
+            prevBtn.isEnabled = true
+            statusTv.text = "Video ini tidak bisa dibaca."
+            return
+        }
+        val start = maxOf(0L, dur / 2 - clipLen / 2)
+        val out = File(cacheDir, "preview.mp4")
         out.delete()
-        curOut = out
-        progBar.progress = 0
-        statusTv.text = "(${i + 1}/${q.size}) ${v.f.name}"
-        val j = Compressor.Job(this, v.f, out, cfg, v.w, v.h, { p ->
-            progBar.progress = p
-            statusTv.text = "(${i + 1}/${q.size}) ${v.f.name}: $p%"
-        }, { err ->
-            if (busy) {
-                job = null
-                if (err != null || !out.exists() || out.length() >= v.f.length()) {
-                    out.delete()
+        val t0 = SystemClock.elapsedRealtime()
+        val job = Compressor.Job(
+            applicationContext, v.f, out, cfg, v.w, v.h, cfg.videoBps(v), start, start + clipLen,
+            { p -> statusTv.text = "Preview: $p%" },
+            { err, enc ->
+                previewing = false
+                prevBtn.isEnabled = true
+                if (err != null || !out.exists()) {
+                    statusTv.text = "Preview gagal: " + (err ?: "tidak ada hasil")
                 } else {
-                    results.add(Pair(v.f, out))
-                    showAfter(out)
-                    MediaScannerConnection.scanFile(this, arrayOf(out.path), null, null)
+                    val full = (out.length() * (dur / clipLen.toDouble())).toLong()
+                    val sec = maxOf(0.1, (SystemClock.elapsedRealtime() - t0) / 1000.0)
+                    val speed = "%.1f".format(clipLen / 1000.0 / sec)
+                    statusTv.text = "Preview jadi: ${speed}x real-time, ${enc ?: "?"}"
+                    showCompare(
+                        v.f, out, v.w, v.h, start.toInt(),
+                        "Perkiraan hasil penuh ±" + fmt(full) + " dari " + fmt(v.f.length()) + " (dihitung dari klip 5 detik)",
+                        false
+                    )
                 }
-                v.sel = false
-                runNext(q, i + 1)
             }
-        })
-        job = j
-        j.start()
-    }
-
-    private fun cancelCompress() {
-        busy = false
-        job?.cancel()
-        job = null
-        curOut?.delete()
-        finishQueue()
-    }
-
-    private fun finishQueue() {
-        busy = false
-        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        progBar.progress = 0
-        renderList()
-        updateEst()
-        if (results.isEmpty()) {
-            statusTv.text = "Selesai. Tidak ada video yang jadi lebih kecil, jadi tidak ada yang disimpan."
-            return
-        }
-        var save = 0L
-        for (r in results) save += r.first.length() - r.second.length()
-        statusTv.text = "Selesai: ${results.size} video, hemat ${fmt(save)} kalau file asli dihapus."
-        AlertDialog.Builder(this)
-            .setTitle("Hapus file asli?")
-            .setMessage(
-                "${results.size} video sudah dikompres. Kalau file asli disimpan, ukuran di HP malah nambah. " +
-                    "Kalau dihapus, hemat ${fmt(save)}. Hasil kompres akan memakai nama file asli."
-            )
-            .setPositiveButton("Hapus asli") { _, _ -> deleteOriginals() }
-            .setNegativeButton("Simpan keduanya", null)
-            .setCancelable(false)
-            .show()
+        )
+        previewJob = job
+        job.start()
     }
 
     private fun deleteOriginals() {
-        val gone = HashSet<File>()
         val paths = ArrayList<String>()
-        for (r in results) {
-            val src = r.first
-            val out = r.second
+        var saved = 0L
+        for (p in Queue.done) {
+            val src = p.first
+            val out = p.second
             val target = File(src.parentFile, src.nameWithoutExtension + ".mp4")
             val sp = src.path
+            val gain = src.length() - out.length()
             if (src.delete()) {
-                gone.add(src)
+                saved += gain
                 paths.add(sp)
                 if (out.renameTo(target)) paths.add(target.path)
             }
         }
         if (paths.isNotEmpty()) MediaScannerConnection.scanFile(this, paths.toTypedArray(), null, null)
+        val gone = HashSet<String>()
+        for (p in Queue.done) if (!p.first.exists()) gone.add(p.first.path)
         val keep = ArrayList<Vid>()
-        for (v in vids) if (!gone.contains(v.f)) keep.add(v)
+        for (v in vids) if (!gone.contains(v.f.path)) keep.add(v)
         vids = keep
-        results.clear()
-        afterFile = null
+        finishDecision("File asli dihapus, hemat ${fmt(saved)}. Hasil kompres memakai nama file asli.")
         renderList()
-        updateEst()
-        statusTv.text = "File asli dihapus."
+    }
+
+    private fun keepBoth() {
+        var extra = 0L
+        for (p in Queue.done) extra += p.second.length()
+        finishDecision("Dua-duanya disimpan. Penyimpanan terpakai ${fmt(extra)} lebih banyak (hasil bernama _starshore.mp4).")
+    }
+
+    private fun finishDecision(msg: String) {
+        Queue.done.clear()
+        Queue.status = msg
+        cmp.release()
+        resCard.visibility = View.GONE
+        refreshComp()
+    }
+
+    // ---------- tab Analisis ----------
+
+    private fun renderAna() {
+        anaBox.removeAllViews()
+        val c = card()
+        c.addView(tv("Penyimpanan", 16f, cIce, true))
+        val a = ana
+        if (a == null) {
+            c.addView(tv(if (busy) "Menganalisis..." else "Lihat folder dan file terbesar di penyimpanan. Folder Android/ tidak ikut dihitung.", 13f, cMute))
+        } else {
+            c.addView(tv("Total terpindai: " + fmt(a.total), 13f, cMute))
+            c.addView(label("Folder terbesar"))
+            for (f in a.folders) {
+                val r = LinearLayout(this)
+                r.orientation = LinearLayout.HORIZONTAL
+                r.setPadding(0, dp(4), 0, dp(4))
+                val n = tv(f.first, 14f, cIce)
+                n.maxLines = 1
+                n.ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                r.addView(n, LinearLayout.LayoutParams(0, WC, 1f))
+                r.addView(tv(fmt(f.second), 14f, cIce, true))
+                c.addView(r)
+            }
+            c.addView(label("File terbesar (ketuk untuk hapus)"))
+            for (f in a.big) {
+                val r = LinearLayout(this)
+                r.orientation = LinearLayout.HORIZONTAL
+                r.setPadding(0, dp(6), 0, dp(6))
+                val n = tv(f.name, 13f, cIce)
+                n.maxLines = 1
+                n.ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
+                r.addView(n, LinearLayout.LayoutParams(0, WC, 1f))
+                r.addView(tv(fmt(f.length()), 13f, cIce, true))
+                r.setOnClickListener { confirmDelete(f) }
+                c.addView(r)
+            }
+        }
+        val b = big(if (busy) "Tunggu sebentar..." else if (a == null) "Analisis sekarang" else "Analisis lagi") { doAna() }
+        b.isEnabled = !busy
+        c.addView(b, lp(MP, WC, 0f, 0).also { it.topMargin = dp(12) })
+        anaBox.addView(c, cardLp())
+    }
+
+    private fun doAna() {
+        if (busy) return
+        if (!hasStorage()) {
+            askStorage()
+            toast("Izinkan akses semua file dulu")
+            return
+        }
+        busy = true
+        renderAna()
+        io.execute {
+            val r = Cleaner.analyze()
+            ui.post {
+                busy = false
+                ana = r
+                renderAna()
+            }
+        }
+    }
+
+    private fun confirmDelete(f: File) {
+        AlertDialog.Builder(this)
+            .setTitle(f.name)
+            .setMessage(f.path.removePrefix(Cleaner.root.path) + "\n" + fmt(f.length()) + "\n\nHapus file ini?")
+            .setPositiveButton("Hapus") { _, _ ->
+                val path = f.path
+                if (f.delete()) {
+                    MediaScannerConnection.scanFile(this, arrayOf(path), null, null)
+                    val a = ana
+                    if (a != null) {
+                        val nb = ArrayList<File>()
+                        for (x in a.big) if (x.path != path) nb.add(x)
+                        ana = Analysis(a.folders, nb, a.total)
+                    }
+                    renderAna()
+                } else {
+                    toast("Gagal menghapus")
+                }
+            }
+            .setNegativeButton("Batal", null)
+            .show()
     }
 }

@@ -12,6 +12,8 @@ fun fmt(b: Long): String = when {
     else -> "$b B"
 }
 
+fun mmss(s: Long): String = "%d:%02d".format(s / 60, s % 60)
+
 class Item(
     val key: String,
     val title: String,
@@ -19,10 +21,13 @@ class Item(
     val bytes: Long,
     val files: List<File>,
     var checked: Boolean,
-    val locked: Boolean
+    val locked: Boolean,
+    val detail: String = ""
 )
 
 class Scan(val files: List<File>, val junk: List<File>, val apks: List<File>, val empty: List<File>)
+class Corpse(val paths: List<String>, val bytes: Long, val detail: String)
+class Analysis(val folders: List<Pair<String, Long>>, val big: List<File>, val total: Long)
 
 object Cleaner {
     val root: File = Environment.getExternalStorageDirectory()
@@ -57,8 +62,11 @@ object Cleaner {
                     if (depth < 12) stack.add(Triple(f, depth + 1, inJunk || f.name.lowercase() in junkDirs))
                 } else {
                     val ext = f.extension.lowercase()
+                    val n = f.name
                     if (ext == "apk") apks.add(f)
-                    else if (inJunk || ext in junkExt || f.name.startsWith(".thumbdata")) junk.add(f)
+                    else if (inJunk || ext in junkExt || n.startsWith(".thumbdata") ||
+                        n.startsWith(".trashed-") || n.startsWith(".pending-")
+                    ) junk.add(f)
                     else files.add(f)
                 }
             }
@@ -87,6 +95,43 @@ object Cleaner {
         return if (out.size > 80) ArrayList(out.subList(0, 80)) else out
     }
 
+    fun analyze(): Analysis {
+        val sizes = HashMap<String, Long>()
+        val heap = java.util.PriorityQueue<Pair<Long, File>>(
+            32, Comparator<Pair<Long, File>> { a, b -> a.first.compareTo(b.first) }
+        )
+        var total = 0L
+        val stack = ArrayList<Triple<File, Int, String>>()
+        stack.add(Triple(root, 0, ""))
+        while (stack.isNotEmpty()) {
+            val (dir, depth, top) = stack.removeAt(stack.size - 1)
+            val list = dir.listFiles() ?: continue
+            for (f in list) {
+                if (f.isDirectory) {
+                    if (depth == 0 && f.name == "Android") continue
+                    if (depth < 14) stack.add(Triple(f, depth + 1, if (depth == 0) f.name else top))
+                } else {
+                    val len = f.length()
+                    val key = if (depth == 0) "(file di root)" else top
+                    sizes[key] = (sizes[key] ?: 0L) + len
+                    total += len
+                    if (heap.size < 25) heap.add(Pair(len, f))
+                    else if (len > heap.peek().first) {
+                        heap.poll()
+                        heap.add(Pair(len, f))
+                    }
+                }
+            }
+        }
+        val folders = ArrayList<Pair<String, Long>>()
+        for ((k, v) in sizes) folders.add(Pair(k, v))
+        folders.sortByDescending { it.second }
+        val big = ArrayList<File>()
+        for (p in heap) big.add(p.second)
+        big.sortByDescending { it.length() }
+        return Analysis(if (folders.size > 15) ArrayList(folders.subList(0, 15)) else folders, big, total)
+    }
+
     private fun md5(f: File, limit: Long): String? {
         return try {
             val md = MessageDigest.getInstance("MD5")
@@ -107,7 +152,7 @@ object Cleaner {
         }
     }
 
-    /** Kembalikan daftar salinan yang bisa dihapus + jumlah grup. Satu file asli (paling lama) tetap dipertahankan. */
+    /** Salinan yang bisa dihapus + jumlah grup. Satu file asli (paling lama) tiap grup dipertahankan. */
     fun dups(files: List<File>): Pair<List<File>, Int> {
         val bySize = HashMap<Long, MutableList<File>>()
         for (f in files) {
@@ -181,11 +226,48 @@ object Cleaner {
         }
     }
 
-    fun trim(): String {
-        return if (Sh.mode == Sh.ROOT) {
-            Sh.run("for p in /data /cache /system /vendor /product; do fstrim -v \$p; done")
-        } else {
-            Sh.run("sm fstrim || sm idle-maint run")
+    /** Sisa data aplikasi yang sudah dihapus: folder paket di Android/data, obb, media. */
+    fun corpses(isInstalled: (String) -> Boolean): Corpse {
+        val bases = listOf("/sdcard/Android/data", "/sdcard/Android/obb", "/sdcard/Android/media")
+        val pat = Regex("^[A-Za-z][A-Za-z0-9_]*(\\.[A-Za-z0-9_]+)+$")
+        val found = ArrayList<String>()
+        for (b in bases) {
+            val out = Sh.run("ls -1 $b 2>/dev/null")
+            for (line in out.lines()) {
+                val n = line.trim()
+                if (pat.matches(n) && !isInstalled(n)) found.add("$b/$n")
+            }
         }
+        if (found.isEmpty()) return Corpse(found, 0L, "")
+        val du = Sh.run("du -sk " + found.joinToString(" "))
+        val sizes = HashMap<String, Long>()
+        for (line in du.lines()) {
+            val p = line.trim().split(Regex("\\s+"), 2)
+            if (p.size == 2) sizes[p[1].trim()] = (p[0].toLongOrNull() ?: 0L) * 1024L
+        }
+        var total = 0L
+        val sb = StringBuilder()
+        for (path in found.sortedByDescending { sizes[it] ?: 0L }) {
+            val s = sizes[path] ?: 0L
+            total += s
+            sb.append(path.removePrefix("/sdcard/")).append("  (").append(fmt(s)).append(")\n")
+        }
+        return Corpse(found, total, sb.toString())
+    }
+
+    fun deleteCorpses(paths: List<String>) {
+        if (paths.isEmpty()) return
+        Sh.run("rm -rf " + paths.joinToString(" ") { "'$it'" })
+    }
+
+    fun trim(): String {
+        val cmd = if (Sh.mode == Sh.ROOT) {
+            "if command -v fstrim >/dev/null 2>&1; then " +
+                "for p in /data /cache /system /vendor /product; do fstrim -v \$p 2>&1; done; " +
+                "else sm fstrim 2>&1 || sm idle-maint run 2>&1; fi"
+        } else {
+            "sm fstrim 2>&1 || sm idle-maint run 2>&1"
+        }
+        return Sh.run(cmd).trim()
     }
 }

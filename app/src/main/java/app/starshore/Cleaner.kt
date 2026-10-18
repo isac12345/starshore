@@ -188,9 +188,16 @@ object Cleaner {
 
     /**
      * Aman hapus: lewati symlink dan lewati path yang keluar dari akar yang diizinkan.
-     * Akar: /sdcard (penyimpanan pengguna) dan /data/data atau /data/user_de (cache internal).
+     * Akar: penyimpanan pengguna (/sdcard dan path yang sudah di-resolve) serta /data/data dan
+     * /data/user_de untuk cache internal.
      */
-    private val OK_ROOTS = listOf("/sdcard", "/data/data", "/data/user_de")
+    private val OK_ROOTS: List<String> = listOfNotNull(
+        "/sdcard",
+        "/storage/emulated/0",
+        try { Environment.getExternalStorageDirectory()?.canonicalPath } catch (e: Exception) { null },
+        "/data/data",
+        "/data/user_de"
+    ).distinct()
 
     private fun safeToDelete(f: File): Boolean {
         // Symlink terdeteksi tanpa java.nio.file supaya tetap jalan di Android 7.0 (API 24)

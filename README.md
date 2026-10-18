@@ -57,4 +57,4 @@ Pilihan terakhir diingat.
 
 Upload project ini ke GitHub. Workflow di `.github/workflows/build.yml` jalan otomatis tiap push. APK ada di tab Actions, bagian Artifacts, namanya Starshore-apk. APK ditandatangani pakai debug key, jadi langsung bisa dipasang.
 
-Kalau build error atau ada bug, pakai prompt di `OPENCODE_PROMPT.md`.
+Kalau ada bug atau permintaan fitur, buka Issue di halaman GitHub repo ini.

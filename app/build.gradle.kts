@@ -29,8 +29,11 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
-            // CI: kunci rilis sendiri dari secrets; lokal atau tanpa secret: debug key
-            signingConfig = if (System.getenv("KEYSTORE_PASSWORD") != null) {
+            // CI: kunci rilis sendiri dari secrets; tanpa secret kosong: debug key.
+            // PENTING: cek string kosong, bukan hanya null. GitHub memberi string kosong
+            // untuk secret yang belum diisi, dan itu membuat Gradle mencari keystore yang tidak ada.
+            val ksPass = System.getenv("KEYSTORE_PASSWORD")
+            signingConfig = if (!ksPass.isNullOrBlank()) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")

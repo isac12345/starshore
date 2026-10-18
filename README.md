@@ -58,3 +58,42 @@ Pilihan terakhir diingat.
 Upload project ini ke GitHub. Workflow di `.github/workflows/build.yml` jalan otomatis tiap push. APK ada di tab Actions, bagian Artifacts, namanya Starshore-apk. APK ditandatangani pakai debug key, jadi langsung bisa dipasang.
 
 Kalau ada bug atau permintaan fitur, buka Issue di halaman GitHub repo ini.
+
+## Izin
+
+| Izin | Untuk apa |
+|---|---|
+| `MANAGE_EXTERNAL_STORAGE` | Mengakses semua file di penyimpanan supaya video bisa dikompres dan sampah bisa dihapus. Android 11 ke atas selalu minta izin lewat layar pengaturan. |
+| `READ_EXTERNAL_STORAGE` dan `WRITE_EXTERNAL_STORAGE` | Versi lama saja, sampai Android 12 (12). Di Android 13 ke atas tidak dipakai. |
+| `QUERY_ALL_PACKAGES` | Mengetahui aplikasi mana yang sudah tidak terpasang, supaya sisa foldernya bisa ditampilkan. |
+| `moe.shizuku.manager.permission.API_V23` | Izin Shizuku. Dipakai untuk membaca dan menghapus cache internal aplikasi lain tanpa root. |
+| `FOREGROUND_SERVICE` dan `FOREGROUND_SERVICE_DATA_SYNC` | Menjaga proses kompres tetap hidup saat layar mati. Notifikasi foreground muncul selama kompres. |
+| `WAKE_LOCK` | Mencegah HP tidur saat kompres video berjalan lama. Dilepas setelah selesai. |
+| `POST_NOTIFICATIONS` | Notifikasi progres kompres di Android 13 ke atas. |
+
+Tidak ada izin internet sama sekali.
+
+## Peringatan
+
+- Penghapusan bersifat permanen, tidak ada sampah yang bisa dikembalikan. Tidak ada recycle bin.
+- Periksa dulu daftarnya. Kalau tidak yakin, jangan centang.
+- Coba dulu di folder uji atau folder yang tidak penting sebelum membersihkan banyak file.
+- Semua penghapusan lewat aplikasi ini butuh centang dan satu ketukan di tombol Bersihkan. Tidak ada
+  penghapusan otomatis.
+- Kompres video baru menghapus file asli kalau kamu mengetuk Hapus file asli. Hasil yang lebih besar
+  dari aslinya otomatis dilewati dan file hasilnya dibuang.
+- Fitur tanpa Shizuku atau root hanya membersihkan cache di Android/data dan Android/media.
+
+## Privasi
+
+- Tidak ada izin internet, jadi tidak ada data yang keluar dari perangkat.
+- Tidak ada analitik, tidak ada pelacak, tidak ada server.
+- Pemindaian file dilakukan di perangkat. Daftar hasil hanya tampil di aplikasi ini.
+
+## Batasan
+
+- Pembersihan di dalam folder internal aplikasi lain butuh Shizuku atau root.
+- APK ditandatangani dengan debug key, jadi harus dipasang lewat "unknown sources" dan belum bisa
+  memperbarui sendiri lewat Play Store.
+- Belum diuji di semua perangkat. Sebagian ROM memblokir TRIM atau access log sistem; kalau diblokir,
+  aplikasi bilang dilewati, bukan error.

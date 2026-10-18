@@ -255,9 +255,13 @@ object Cleaner {
         return Corpse(found, total, sb.toString())
     }
 
+    /** Bungkus path untuk sh -c dengan aman: kutip tunggal, dan kutip di dalam path di-escape. */
+    private fun shQuote(p: String): String = "'" + p.replace("'", "'\\''") + "'"
+
     fun deleteCorpses(paths: List<String>) {
         if (paths.isEmpty()) return
-        Sh.run("rm -rf " + paths.joinToString(" ") { "'$it'" })
+        // Quote dulu supaya nama file berisi tanda kutip tidak menutup kutip shell
+        Sh.run("rm -rf " + paths.joinToString(" ") { shQuote(it) })
     }
 
     fun trim(): String {

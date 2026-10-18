@@ -407,7 +407,10 @@ object Queue {
             run(v, out)
             return
         }
-        if (o >= size) {
+        if (o <= 0L) {
+            out.delete()
+            log.add("$name: dilewati, hasil kosong")
+        } else if (o >= size) {
             out.delete()
             log.add("$name: dilewati, hasil tidak lebih kecil (${fmt(o)} dari ${fmt(size)})")
         } else {

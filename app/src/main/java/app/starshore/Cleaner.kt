@@ -186,9 +186,23 @@ object Cleaner {
         return Pair(del, groups)
     }
 
+    /**
+     * Aman hapus: lewati symlink dan lewati path yang keluar dari akar yang diizinkan.
+     * Akar: /sdcard (penyimpanan pengguna) dan /data/data atau /data/user_de (cache internal).
+     */
+    private val OK_ROOTS = listOf("/sdcard", "/data/data", "/data/user_de")
+
+    private fun safeToDelete(f: File): Boolean {
+        // Symlink terdeteksi tanpa java.nio.file supaya tetap jalan di Android 7.0 (API 24)
+        val c = try { f.canonicalPath } catch (e: Exception) { return false }
+        if (c != f.absolutePath) return false
+        return OK_ROOTS.any { c == it || c.startsWith(it + "/") }
+    }
+
     fun delete(l: List<File>): Long {
         var freed = 0L
         for (f in l) {
+            if (!safeToDelete(f)) continue
             val s = f.length()
             if (f.delete()) freed += s
         }
@@ -196,7 +210,7 @@ object Cleaner {
     }
 
     fun deleteDirs(l: List<File>) {
-        for (d in l.sortedByDescending { it.path.length }) d.delete()
+        for (d in l.sortedByDescending { it.path.length }) if (safeToDelete(d)) d.delete()
     }
 
     // ---- butuh Shizuku / root ----
@@ -260,8 +274,10 @@ object Cleaner {
 
     fun deleteCorpses(paths: List<String>) {
         if (paths.isEmpty()) return
+        val safe = paths.map { File(it) }.filter { safeToDelete(it) }.map { it.path }
+        if (safe.isEmpty()) return
         // Quote dulu supaya nama file berisi tanda kutip tidak menutup kutip shell
-        Sh.run("rm -rf " + paths.joinToString(" ") { shQuote(it) })
+        Sh.run("rm -rf " + safe.joinToString(" ") { shQuote(it) })
     }
 
     fun trim(): String {

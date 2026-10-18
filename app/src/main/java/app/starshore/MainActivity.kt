@@ -376,6 +376,8 @@ class MainActivity : Activity() {
         Sh.unlisten()
         previewJob?.cancel()
         cmp.release()
+        io.shutdown()
+        thumbIo.shutdown()
         super.onDestroy()
     }
 

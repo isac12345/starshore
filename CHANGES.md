@@ -1,5 +1,4 @@
 # CHANGES - Starshore
-
 ## v1.0.0 (rilis pertama)
 
 - Pindai semua file di penyimpanan, tampilkan daftar dan ukurannya, lalu kamu yang memilih

@@ -4,20 +4,21 @@ Clean up junk on your phone and shrink video files. No internet, no ads.
 
 **[Download APK](../../releases/latest)**
 
-Android 7.0+ - 778 KB - no ads - no internet
+Android 7.0+ - no ads - no internet
 
 ## Features
 
 | | |
 |---|---|
-| **Scan** | Lists every file it found with its size. You tick what to delete, then press Clean. |
+| **Scan** | Lists what it found with sizes. You tick what to delete, then press Bersihkan. |
 | **Duplicates** | Matched by file content, not by name. One original per group is always kept. |
-| **Junk files** | Temp files, logs, caches, leftover APKs, empty folders, and gallery trash. |
-| **Compress** | Hardware encoder, with a bitrate or a target size per video. |
-| **Audio** | Microphone, internal audio, or both, muxed into the compressed file. |
+| **Junk** | Temp files, logs, thumbnails, cache folders, gallery trash, leftover APKs, empty folders. |
+| **Compress** | Hardware encoder, with a bitrate up to 90 percent of the original or a target size. |
+| **Audio** | Keep the original audio, shrink it to 64 kbps, or drop it. |
 | **Compare** | Slide between the original and the compressed video, with a 5 second preview. |
-| **Paste bar** | The last 20 copied snippets stay in the suggestion bar, ready to paste. |
-| **Batal** | Undo deletes the last word, press again for the one before it. |
+| **Cancel** | The Batal button stops a running compression and keeps what is already done. |
+| **Clean cache** | App cache under Android/data and Android/media. |
+| **With Shizuku or root** | Leftover folders of uninstalled apps, internal app cache, system logs (logcat, ANR, tombstone), and TRIM. |
 
 ## Install
 
@@ -42,8 +43,8 @@ Android 7.0+ - 778 KB - no ads - no internet
 - Deletion is permanent. There is no trash bin and no undo for a deleted file.
 - Read the list first. If you are not sure about an item, do not tick it.
 - Try it on a test folder before a big clean.
-- Every deletion needs a tick from you and one tap on the Clean button. Nothing is deleted automatically.
-- Compressing only removes the original when you tap Delete original. A result that is not smaller is
+- Every deletion needs a tick from you and one tap on the Bersihkan button. Nothing is deleted automatically.
+- Compressing only removes the original when you tap Hapus file asli. A result that is not smaller is
   discarded and the original is kept.
 - Without Shizuku or root, the app only cleans cache under `Android/data` and `Android/media`.
 
